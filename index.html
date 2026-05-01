@@ -220,8 +220,10 @@
 // ============================================================================
 // CONFIGURATION
 // ============================================================================
-// Hardcoded Netlify-URL — wenn die Site mal umzieht, hier ändern:
-const HARDCODED_BASE_URL = "https://mobile-recalllab.netlify.app";
+// Hardcoded URL der Netlify-Site, auf der die Management-App + Blob-Functions laufen.
+// Die Mobile-App selbst liegt auf einer anderen Netlify-Site (recalllab-mobile),
+// also gehen die Requests cross-origin — die Functions setzen CORS: *.
+const HARDCODED_BASE_URL = "https://management-xo2-pro.netlify.app";
 
 const APP_DATA_KEY = "app-data.json";
 const MOBILE_DELTA_KEY = "recalllab-mobile.json";
@@ -230,7 +232,7 @@ const LOCAL_PENDING_KEY = "recalllab-mobile-pending-reviews";
 const DEVICE_ID_KEY = "recalllab-mobile-device-id";
 const SETTINGS_KEY = "recalllab-mobile-settings";
 const META_KEY = "recalllab-mobile-meta";
-const AUTH_TOKEN_KEY = "recalllab-mobile-auth-token"; // Nur Token, URL ist hardcoded
+const AUTH_TOKEN_KEY = "recalllab-mobile-auth-token";
 
 const state = {
   rl: null,
@@ -258,14 +260,14 @@ function getDeviceId() {
 }
 
 function loadConfig() {
-  // URL ist hardcoded, nur Auth-Token kann optional aus localStorage kommen
+  // URL ist hardcoded, nur Auth-Token kommt aus localStorage
   try {
     const token = localStorage.getItem(AUTH_TOKEN_KEY) || "";
     state.config = { baseUrl: HARDCODED_BASE_URL, authToken: token };
   } catch(e) {
     state.config = { baseUrl: HARDCODED_BASE_URL, authToken: "" };
   }
-  return true; // immer konfiguriert, da URL fest
+  return true;
 }
 
 function saveAuthToken(token) {
