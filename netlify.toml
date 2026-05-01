@@ -1,0 +1,22 @@
+[build]
+  publish = "."
+  functions = "netlify/functions"
+
+[functions]
+  node_bundler = "esbuild"
+
+[[redirects]]
+  from = "/api/blob-get"
+  to = "/.netlify/functions/blob-get"
+  status = 200
+
+[[redirects]]
+  from = "/api/blob-put"
+  to = "/.netlify/functions/blob-put"
+  status = 200
+
+[[headers]]
+  for = "/*"
+  [headers.values]
+    X-Content-Type-Options = "nosniff"
+    Referrer-Policy = "strict-origin-when-cross-origin"
