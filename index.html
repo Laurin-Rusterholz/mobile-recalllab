@@ -342,10 +342,11 @@ function updateSyncChip(status, msg) {
 async function blobGet(key) {
   if (!state.config?.baseUrl) throw new Error("Endpoint nicht konfiguriert");
   const baseUrl = state.config.baseUrl.replace(/\/$/, "");
+  // Cache-Busting über Query-Param, NICHT über Cache-Control-Header (CORS-Preflight-Probleme!)
   const url = baseUrl + "/.netlify/functions/blob-get?key=" + encodeURIComponent(key) + "&_ts=" + Date.now();
-  const headers = { "Cache-Control": "no-cache" };
+  const headers = {};
   if (state.config.authToken) headers["Authorization"] = "Bearer " + state.config.authToken;
-  const resp = await fetch(url, { headers });
+  const resp = await fetch(url, { headers, cache: "no-store" });
   if (resp.status === 404) {
     return { ok: false, status: 404 };
   }
