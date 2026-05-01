@@ -389,11 +389,20 @@ async function pull(opts = {}) {
   try {
     const result = await blobGet(APP_DATA_KEY);
     if (!result.ok) {
-      throw new Error("Keine Daten gefunden (HTTP " + (result.status || "?") + ")");
+      // 404 = Haupt-App hat noch nichts gepusht — kein Fehler, freundliche Nachricht
+      if (result.status === 404) {
+        updateSyncChip("warn", "Keine Cloud-Daten");
+        if (!silent) toast("Cloud ist leer — push erst von der Haupt-App", "warn", 5000);
+        return false;
+      }
+      throw new Error("HTTP " + (result.status || "?"));
     }
     const cloudData = result.data;
     if (!cloudData || !cloudData.recallLabData) {
-      throw new Error("Keine RecallLab-Daten im Cloud-Payload");
+      // App-Daten sind da, aber kein recallLabData drin
+      updateSyncChip("warn", "Keine Karten");
+      if (!silent) toast("Haupt-App hat noch keine RecallLab-Karten", "warn", 5000);
+      return false;
     }
     const cloudRL = cloudData.recallLabData;
     const cloudTs = getDataTimestamp(cloudData);
@@ -413,11 +422,25 @@ async function pull(opts = {}) {
     return true;
   } catch(e) {
     console.error("Pull failed", e);
-    updateSyncChip("error", "Pull-Fehler");
-    if (!silent) toast("Pull fehlgeschlagen: " + (e.message || "Unbekannt"), "err");
-    // Bei 401: Auth-Token-Prompt anzeigen
-    if (e && /401|Unauth/i.test(String(e.message || ""))) {
-      setTimeout(() => renderAuthTokenPrompt(), 200);
+    const msg = String(e?.message || "Unbekannt");
+    
+    // Spezifischere Status-Behandlung
+    if (/401|Unauth/i.test(msg)) {
+      updateSyncChip("error", "Auth-Fehler");
+      if (!silent) toast("Auth-Token falsch", "err", 4000);
+      setTimeout(() => renderAuthTokenPrompt(), 400);
+    } else if (/404/.test(msg)) {
+      updateSyncChip("warn", "Function fehlt");
+      if (!silent) toast("Function nicht deployed (404)", "err", 5000);
+    } else if (/500/.test(msg)) {
+      updateSyncChip("error", "Server-Fehler");
+      if (!silent) toast("Netlify-Function-Fehler (500). Logs prüfen.", "err", 5000);
+    } else if (/NetworkError|Failed to fetch|TypeError/i.test(msg)) {
+      updateSyncChip("error", "Offline?");
+      if (!silent) toast("Keine Verbindung zu " + state.config.baseUrl.replace(/^https?:\/\//,""), "err", 5000);
+    } else {
+      updateSyncChip("error", "Pull-Fehler");
+      if (!silent) toast("Pull: " + msg, "err", 5000);
     }
     return false;
   } finally {
@@ -638,8 +661,10 @@ function renderMain() {
       <div class="empty">
         <div class="empty-emoji">📥</div>
         <div class="empty-text">Keine Daten geladen.<br>Drücke unten auf <strong>Synchronisieren</strong>.</div>
-        <button class="btn btn-primary btn-lg" style="margin-top:24px" onclick="window.openSettings()">⚙️ Einstellungen</button>
-        <button class="btn btn-block btn-lg" style="margin-top:12px" onclick="window.forceSync()">🔄 Jetzt synchronisieren</button>
+        <button class="btn btn-primary btn-lg" style="margin-top:24px" onclick="window.forceSync()">🔄 Jetzt synchronisieren</button>
+        <button class="btn btn-block btn-lg" style="margin-top:12px" onclick="window.runDiagnose()">🩺 Diagnose ausführen</button>
+        <button class="btn btn-block btn-ghost" style="margin-top:12px" onclick="window.openSettings()">⚙️ Einstellungen</button>
+        <div id="diagnoseResultMobile" style="margin-top:20px;font-size:11px;font-family:monospace;color:#a1a1aa;text-align:left;white-space:pre-wrap;background:#18181b;border:1px solid #27272a;border-radius:8px;padding:12px;max-height:300px;overflow-y:auto"></div>
       </div>
     `;
     return;
@@ -897,6 +922,90 @@ window.openSettings = openSettings;
 window.startReview = startReview;
 window.endReview = endReview;
 window.forceSync = forceSync;
+
+window.runDiagnose = async function() {
+  const out = document.getElementById('diagnoseResultMobile');
+  const lines = [];
+  const log = (msg) => { lines.push(msg); if (out) out.textContent = lines.join("\n"); };
+  
+  log("🩺 Diagnose läuft...\n");
+  log("Endpoint: " + state.config.baseUrl);
+  log("Auth-Token: " + (state.config.authToken ? "gesetzt (" + state.config.authToken.length + " Zeichen)" : "LEER"));
+  log("");
+  
+  const baseUrl = state.config.baseUrl.replace(/\/$/, "");
+  
+  // 1. Test ob die Site überhaupt erreichbar ist
+  log("1) Teste, ob Site erreichbar...");
+  try {
+    const r = await fetch(baseUrl + "/", { method: "HEAD", cache: "no-cache" });
+    log("   ✓ Site antwortet (Status " + r.status + ")");
+  } catch(e) {
+    log("   ✗ Site nicht erreichbar: " + (e.message || e));
+    log("\n→ Domain falsch oder offline?");
+    return;
+  }
+  
+  // 2. Test GET-Endpoint
+  log("\n2) Teste GET-Endpoint...");
+  try {
+    const url = baseUrl + "/.netlify/functions/blob-get?key=" + encodeURIComponent(APP_DATA_KEY) + "&_ts=" + Date.now();
+    const headers = {};
+    if (state.config.authToken) headers["Authorization"] = "Bearer " + state.config.authToken;
+    const r = await fetch(url, { headers });
+    const txt = await r.text();
+    log("   Status: " + r.status);
+    if (r.status === 200) {
+      try {
+        const json = JSON.parse(txt);
+        log("   ✓ JSON empfangen (" + txt.length + " Bytes)");
+        log("   recallLabData? " + (json.recallLabData ? "JA (" + (json.recallLabData.cards?.length || 0) + " Karten)" : "NEIN"));
+      } catch(e) {
+        log("   ⚠️ Antwort ist kein JSON. Erste 200 Zeichen:");
+        log("   " + txt.slice(0, 200));
+      }
+    } else if (r.status === 401) {
+      log("   ✗ Auth-Token falsch oder fehlt");
+    } else if (r.status === 404) {
+      log("   ✗ 404 — Function nicht deployed ODER noch keine Daten");
+      log("   (Antwort: " + txt.slice(0, 100) + ")");
+    } else if (r.status === 500) {
+      log("   ✗ Server-Fehler");
+      log("   (Antwort: " + txt.slice(0, 200) + ")");
+    } else {
+      log("   ✗ Unerwarteter Status. Antwort: " + txt.slice(0, 200));
+    }
+  } catch(e) {
+    log("   ✗ Exception: " + (e.message || e));
+  }
+  
+  // 3. Test PUT-Endpoint
+  log("\n3) Teste PUT-Endpoint...");
+  try {
+    const url = baseUrl + "/.netlify/functions/blob-put?key=_diagnose-mobile-test.json";
+    const headers = { "Content-Type": "application/json" };
+    if (state.config.authToken) headers["Authorization"] = "Bearer " + state.config.authToken;
+    const r = await fetch(url, { 
+      method: "PUT", 
+      headers, 
+      body: JSON.stringify({ test: true, ts: Date.now(), source: "mobile-diagnose" })
+    });
+    log("   Status: " + r.status);
+    if (r.status === 200) {
+      log("   ✓ PUT erfolgreich");
+    } else {
+      const txt = await r.text();
+      log("   ✗ Antwort: " + txt.slice(0, 200));
+    }
+  } catch(e) {
+    log("   ✗ Exception: " + (e.message || e));
+  }
+  
+  log("\n=== Diagnose fertig ===");
+  log("\nFalls 404 bei GET: lass die Haupt-App auf dem Desktop einmal pushen (☁️-Button).");
+  log("Falls 401: Auth-Token in Settings anpassen.");
+  log("Falls 500: Netlify-Function-Logs prüfen (möglicherweise package.json mit @netlify/blobs fehlt).");
+};
 
 $("cardArea").addEventListener("click", () => {
   if ($("reviewScreen").style.display !== "none" && !state.answerRevealed) {
